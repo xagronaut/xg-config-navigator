@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Config Navigator</title>
+    <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1">
+    <!-- For loading external data files -->
+    <script src="https://cdn.polyfill.io/v2/polyfill.min.js?features=Promise,fetch"></script>
+	<link type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' href='data/config-data.xlsx' rel='excel-data' >
+	<link type='application/json' href='data/nav-config.json' rel='nav-config' >
+	<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.0/angular.js"></script>
+	<script type='text/javascript' src='js/jszip.js'></script>
+	<script type='text/javascript' src='js/xlsx.js'></script>
+	<script type='text/javascript' src='js/d3v4.js'></script>
+	<script type='text/javascript' src='js/d3-scale-chromatic.v0.3.min.js'></script>
+	<script type='text/javascript' src='js/jquery.js'></script>
+	<script type='text/javascript' src='js/jquery-ui.js'></script>
+	<script type='text/javascript' src='js/jquery.layout.js'></script>
+
+	<script type='text/javascript' src='js/bootstrap.bundle.js'></script>
+    <script type='text/javascript' src='js/cytoscape.min.js'></script>
+	<script type='text/javascript' src='js/cytoscape-cose-bilkent.js'></script>
+    <link type='text/css' href='css/bootstrap.min.css' rel='stylesheet' >
+	<link type='text/css' href='css/jquery-layout-complex.css' rel='stylesheet' >
+	<link type='text/css' href='css/style.css' rel='stylesheet' >
+	<script type='text/javascript'>
+	(function(window, undefined) {
+		function NavUtil() {}
+
+		NavUtil.getMatchingPropertyName = function (name, obj) {
+			var regex = new RegExp("\\s*" + name + "\\s*", "i");
+			return Object.keys(obj).find(function(key) { return regex.test(key); });
+		};
+
+		NavUtil.standardizeTagName = function (value) {
+			var result = '#' + (value || '').trim().replace('#', '').replace(/\s+/g, '');
+			if(result == '#') {
+				debugger;
+			}
+			return result;
+		};
+
+        NavUtil.formatNodeTag = function(tag){
+			result = 'tagged-' + (tag || '').trim().replace('#', '').replace(/[#\.\s]+/g, '-');
+            return result;           
+        }
+
+		NavUtil.getUniqueItems = function (arr) {
+			var seen = {};
+			return arr.filter(function(item) {
+				return seen.hasOwnProperty(item) ? false : (seen[item] = true);
+			});
+		};
+
+		NavUtil.copyPropertyList = function(propList, source, target) {
+			propList = propList || [];
+			target = target || {};
+
+			propList.forEach(function(key) { target[key] = source[key]; });
+
+			return target;
+		};
+
+		window.NavUtil = window.NavUtil || NavUtil;
+	}(window));
+	</script>
+	<script type="text/javascript">
+	(function(window, NavUtil, undefined) {
+		var app = angular.module('SpreadNode', []);
+
+		app
+			.filter('orderByObjectProperty', function() {
+				return function(input, propertyName) {
+					// Influenced by: https://stackoverflow.com/questions/14478106/angularjs-sorting-by-property, https://stackoverflow.com/questions/14478106/angularjs-sorting-by-property#comment38504634_18186947
+					if(!angular.isObject(input)) return input;
+
+					var items = [];
+
+					for(var key in input) {
+						var item = input[key];
+						item['_key'] = key;
+						items.push(item);
+					}
+
+					return items.sort(function(a, b) {
+						var aValue = a[propertyName], bValue = b[propertyName];
+						return aValue > bValue ? 1 : (aValue < bValue ? -1 : 0);
+					});
+				}
+			})
+			.filter('relationshipProperties', function() {
+				var propertyRegExp = new RegExp("/^(?:\s*:)([A-Za-z][A-Za-z0-9_]*)(?:\s+)(\S\s*)+$/");
+
+				return function(input) {
+					if(!angular.isObject(input)) return input;
+
+					var relationshipProperties = [];
+
+					var relationshipTypes = {};
+
+					for(var key in input) {
+						var match = propertyRegExp.match(key);
+						
+						debugger;
+
+						//[{
+						//	relationshipType: "INCLUDES", 
+						//	targetTypes : [{ targetType: "Partner System", targetValue: "OdtStarsQA1" }]
+						//}]
+
+						if(match == null) {
+							continue;
+						}
+
+						if(propertyRegExp.match()) {
+							var relationshipType = match[1];
+							var targetType = match[2].trim();
+							relationshipProperties.push(key);
+						}
+					}
+
+					return relationshipProperties.sort();
+				}
+			})
+			.filter('formatNodeTag', function() {
+				var tagCache = {};
+				return function(input) {
+					var result = NavUtil.formatNodeTag(input);
+					return result;
+				};
+			})
+			.filter('cleanCssId', function() {
+				var idCache = {};
+
+				return function(input) {
+					var result = idCache[input] || (idCache[input] = (input || '').trim().replace('#', '').replace(/[#\.\s]+/g, '-'));
+					if(result == undefined) {
+						debugger;
+					}
+					return result;
+				};
+			})
+			.filter('splitList', function() {
+				return function(input) {
+					return (input || '').trim().split(/\s*,\s*/);
+				};
+			})
+			.controller('SpreadNodeCtrl', ['$scope', '$sce', '$timeout', SpreadNodeCtrl]);
+
+		var colorCount = 20;
+		var nodeColorFunc = d3.scaleOrdinal(d3.schemeCategory20);
+		var parentColorFunc = d3.scaleOrdinal(d3.schemePaired);
+
+		function rgbToHex(r, g, b) {
+			return '#' + (0x1000000 + (Math.trunc(b) | (Math.trunc(g) << 8) | (Math.trunc(r) << 16))).toString(16).slice(1);
+		}
+
+		function getColorSet(colorIndex) {
+			var color = nodeColorFunc(colorIndex),
+						borderColorRgb = d3.rgb(color).darker(),
+						borderColor = rgbToHex(borderColorRgb.r, borderColorRgb.g, borderColorRgb.b),
+						parentColor = parentColorFunc(colorIndex);
+			return {
+				color: color,
+				borderColor: borderColor,
+				parentColor: parentColor
+			}
+		}
+
+		function SpreadNodeCtrl($scope, $sce, $timeout) {
+			console.log("SpreadNodeCtrl construtor ran.");
+			$scope.nodeColors = (".".repeat(20).split("")).map(function(item, index) { return getColorSet(index); });
+
+			function downloadData(href, downloadName) {
+				var downloadLink = document.createElement('a');
+				downloadLink.setAttribute('href', href);
+				downloadLink.setAttribute('download', downloadName);
+				downloadLink.setAttribute('style', 'visibility: hidden; height: 1px; width: 1px;');
+				var body = document.querySelector('body');
+				body.appendChild(downloadLink);
+				downloadLink.click();
+				body.removeChild(downloadLink);
+			}
+
+			$scope.downloadImage = function() {
+				var canvas = document.querySelector('[data-id="layer2-node"]');
+				var imageDataUrl = canvas.toDataURL('image/png');
+				downloadData(imageDataUrl, 'diagram.png');
+			}
+
+			$scope.downloadData = function() {
+				var excelDataLink = document.querySelector('link[rel="excel-data"]'),
+					excelDataHref = (excelDataLink && (excelDataLink.getAttribute('href') || ''));
+
+				var dateText = (new Date()).toISOString().slice(0, 10).replace(/-/g, '');
+
+				var fileName = prompt('Enter the filename:', 'config-data-' + dateText +'.xlsx');
+
+				if(fileName) {
+					downloadData(excelDataHref, fileName);
+				}
+			}
+
+			$scope.setGroupVisibility = function (groupId, isDisplayed) {
+				var { cyControls } = $scope;
+				(cyControls && cyControls.setGroupVisibility(groupId, isDisplayed));
+			}
+
+			$scope.updateNodeGroupColor = function(groupId, colorValue, parentColorValue) {
+				var { cyControls, groups, nodeColors } = $scope,
+				colorSet = nodeColors.find(function(item) { return item.color == colorValue; });
+
+				var group = groups[groupId];
+				group.color = colorSet.color;
+				group.borderColor = colorSet.borderColor;
+				group.parentColor = parentColorValue || colorSet.parentColor;
+
+				(cyControls && cyControls.setGroupColor(group.name, { color: group.color, borderColor: group.borderColor, parentColor: group.parentColor }));
+			}
+
+			$scope.saveView = function() {
+				var { cyControls } = $scope;
+				if(!cyControls) return;
+				localStorage.setItem("currentView", JSON.stringify(cyControls.getViewData()));
+			};
+
+			$scope.restoreView = function() {
+				var { cyControls } = $scope;
+				if(!cyControls) return;
+
+				var viewData = localStorage.getItem("currentView");
+				if(viewData) {
+					cyControls.restoreViewData(viewData);
+				}
+			};
+			
+			function SpreadNodeUtil() {}
+
+			SpreadNodeUtil.setData = function(graphData) {
+				$scope.graphData = graphData;
+				var nodeIds = {};
+				$scope.groups = {};
+
+				graphData.nodes.forEach(function(node){
+					var nodeIsHidden = (node.id || '').trim().startsWith('.');
+					nodeIds[node.id] = node.id;
+
+					var nodeType = node.type,
+						group = $scope.groups[nodeType];
+					
+					if(group == undefined) {
+						var groupCount = Object.keys($scope.groups).length,
+							colorIndex = groupCount % colorCount,
+							{ color, borderColor, parentColor } = $scope.nodeColors[colorIndex];
+
+						$scope.groups[nodeType] = group = {
+							"groupId": '' + (groupCount + 1),
+							"name": nodeType,
+							"displayed": true,
+							"colorIndex": colorIndex,
+							"color": color,
+							"borderColor": borderColor,
+							"parentColor": parentColor,
+							"nodes": []
+						};
+					}
+
+					var nodeIsContainer = false;
+					for(var key in node.data) {
+						if(key.match(/^\s*:INCLUDES\s+/i) != null) {
+							nodeIsContainer = true;
+							break;
+						}
+					}
+
+					node.isContainer = nodeIsContainer;
+
+					group.hasContainers = group.hasContainers || nodeIsContainer || false;
+					group.hasNonContainers = group.hasNonContainers || !nodeIsContainer || false;
+
+					group.nodes.push({ "data": node, "displayed": !nodeIsHidden });
+				});
+
+				$scope.nodeIds = Object.keys(nodeIds).sort();
+			
+				$scope.relationshipTypes = {};
+				graphData.links.forEach(function(link) {
+					var relationshipTypeName = link.value, relationshipType = $scope.relationshipTypes[relationshipTypeName];
+					(relationshipType == undefined && ($scope.relationshipTypes[relationshipTypeName] = relationshipType = {
+						"name": relationshipTypeName,
+						"displayed" : true,
+						"links": []
+					}));
+					relationshipType.links.push({ "data": link, "displayed": true});
+				})
+
+				$scope.$apply();
+			};
+
+			SpreadNodeUtil.loadOptions = function(url) {
+				var defaultOptions = $scope.navOptions = {
+					allowSuggestions: false,
+					configChangeTo: "",
+					configChangeCC: ""
+				};
+
+				fetch(url, {
+					method: "GET",
+					cache: "no-cache",
+					credentials: "include",
+					mode: "no-cors",
+					responseType : "json"
+				}).then(function(response) {
+					response.json().then(function(data) {
+						if(data) {
+							$scope.navOptions = data;
+						}
+					});
+				});
+			};
+
+			SpreadNodeUtil.setNodeDetails = function(details) {
+				$timeout(function() {
+					if(!details) {
+						$scope.selectedNodeId = undefined;
+					} else {
+						$scope.selectedNodeId = details.id;
+					}
+					$scope.nodeDetails = details;
+				});
+			};
+            
+            SpreadNodeUtil.getData = function(callback) {
+                (callback && (typeof callback == "function") && callback({
+                    graphData: $scope.graphData,
+                    groups: $scope.groups
+                }));
+			};
+
+			SpreadNodeUtil.resizeDiagram = function() {
+				var { cyControls } = $scope;
+				(cyControls && cyControls.resizeDiagram());
+			};
+
+			SpreadNodeUtil.setCyControls = function(cyControls){
+				if(!cyControls) {
+					console.warn('cyControls not set!');
+					return;
+				}
+				$scope.cyControls = cyControls;
+				var apiMethods = [
+					"highlightTag", "selectTag", "subtractTag", "isolateTag", "addTag",
+					"getOrphanNodes", "highlightOrphans", "isolateOrphans", "subtractOrphans", 
+					"expandIsolation", "subtractSelected", "isolateSelected", "isolatePlusOne",
+					"fitAll", "arrange",
+					"resetDiagram",
+					"selectParent",
+					"getViewData", "restoreViewData"
+				];
+				NavUtil.copyPropertyList(apiMethods, cyControls, $scope);
+
+				// debug tracing code
+				apiMethods.forEach(function(name) {
+					var currentFunction = $scope[name];
+					$scope[name] = function() {
+						var args = [].slice.call(arguments);
+						console.log(`calling ${name} with arguments [${args}]`);
+						return currentFunction.apply(null, arguments);
+					}
+				});
+
+				$scope.selectNode = function(nodeId) {
+					var { cyControls } = $scope;
+					(cyControls && cyControls.selectNode(nodeId));
+					$scope.selectedNodeId = nodeId;
+				};
+
+				cyControls.onSelect(SpreadNodeUtil.setNodeDetails);
+				cyControls.onUnselect(SpreadNodeUtil.setNodeDetails);
+				//cyControls.onVisibleChange($scope.saveView);
+				//cyControls.onSubtract($scope.saveView);
+				//cyControls.onIsolate($scope.saveView);
+				//cyControls.onExpand($scope.saveView);
+
+				$timeout(function() {
+					$scope.orphanNodes = $scope.getOrphanNodes();
+				}, 1);
+			}
+
+			window.SpreadNodeUtil = window.SpreadNodeUtil || SpreadNodeUtil;
+		}
+	}(window, window.NavUtil));	
+	</script>
+	<script type='text/javascript' src='js/xlsxutil.js'></script>
+	<script type='text/javascript' src='js/cytoscapeutil.js'></script>
+</head>
+<body ng-app="SpreadNode" ng-controller="SpreadNodeCtrl" class="ui-layout-container" style="position: absolute;">
+	<div id="leftToolPane" class="ui-layout-west">
+		<div id="tagsPane" class="ui-layout-center">
+			<div class="header">Tags</div>
+			<div class="content ui-layout-content">
+				<ul class="no-bullets" style="overflow-y: auto;">
+					<li id="headingTagOrphans" class="card" data-toggle="collapse" ng-show="orphanNodes && orphanNodes.length">
+						<div class="card-header" style="border: 2px solid #777777; background-color: lightyellow;" >
+							<button class="btn btn-link" data-toggle="collapse" data-target="#collapseTagOrphans" title="Objects that aren't associated with a container">*Orphaned Items</button>
+						</div>
+						<div id="collapseTagOrphans" class="collapse" data-parent="#headingTagOrphans">
+							<ul class="toolbar">
+								<li ng-click="highlightOrphans()"><i class="highlight"></i>Highlight</li>
+								<li ng-click="isolateOrphans();"><i class="isolate"></i>Isolate</li>
+								<li ng-click="subtractOrphans()"><i class="subtract"></i>Subtract</li>
+							</ul>
+							<ul class="card-body no-bullets"><li ng-repeat="o in orphanNodes"><a href="#" ng-click="selectNode(o.id)">{{o.id}}</a></li></ul>
+						</div>
+					</li>
+					<li id="headingTag{{ tag.name | cleanCssId }}" class="card" data-toggle="collapse" ng-repeat="tag in graphData.tags track by (tag.name | cleanCssId) | orderBy:'name'" >
+						<div class="card-header" style="border: 2px solid #777777;">
+							<button class="btn btn-link" data-toggle="collapse" data-target="#collapseTag{{ tag.name | cleanCssId }}"><i class="icon tag" style="margin-right: 3px; padding: -10px;"></i>{{tag.name}}</button>
+						</div>
+						<div id="collapseTag{{ tag.name | cleanCssId }}" class="collapse" data-parent="#headingTag{{ tag.name | cleanCssId }}">
+							<ul class="toolbar">
+								<li ng-click="highlightTag(tag.id | formatNodeTag)"><i class="highlight"></i>Highlight</li>
+								<li ng-click="isolateTag(tag.id | formatNodeTag);"><i class="isolate"></i>Isolate</li>
+								<li ng-click="addTag(tag.id | formatNodeTag)"><i class="add"></i>Add</li>
+								<li ng-click="subtractTag(tag.id | formatNodeTag);"><i class="subtract"></i>Subtract</li>
+							</ul>
+							<ul class="card-body no-bullets">
+								<li ng-repeat="taggedItem in tag.items track by taggedItem" style="vertical-align: middle; line-height: 40px;">
+									<div class="item-buttons">
+										<button class="btn" ng-click="isolatePlusOne(taggedItem)"><i class="icon isolate"></i><i class="icon plusone"></i></button>
+										<button class="btn" ng-click=""><i class="icon link"></i></button>
+									</div>
+									<a href="#" ng-click="selectNode(taggedItem)" style="">{{taggedItem}}</a>
+									<!-- <hr class="clear-float" /> -->
+								</li>
+							</ul>
+						</div>
+					</li>
+				</ul>
+			</div>
+		</div>
+		<div id="nodeTypesPane" class="ui-layout-south">
+			<div class="header">Types</div>
+			<div class="content ui-layout-content">
+				<ul id="nodeTypeList" class="content no-bullets">
+					<li id="heading{{g.groupId}}" class="card" data-toggle="collapse" ng-repeat="g in groups" style="min-width: 250px;">
+						<div class="card-header" style="border: 2px solid {{g.parentColor}}; vertical-align: middle;">
+							<div style="float: left;">
+								<input type="checkbox" ng-model="g.displayed" ng-change="setGroupVisibility(g.name, g.displayed)" style="margin-right: 2px;" /><button class="btn btn-link" data-toggle="collapse" data-target="#collapse{{g.groupId}}" type="button">{{g.name}}</button>
+							</div>
+							<div style="float: right; margin-top: .3em;">
+								<select ng-model="g.parentColor" style="width: 30px; background-color: {{g.parentColor}};" ng-show="g.hasContainers" ng-change="updateNodeGroupColor(g.name, g.color, g.parentColor)">
+									<option ng-repeat="colorChoice in nodeColors track by colorChoice.color" value="{{colorChoice.parentColor}}" ng-selected="g.parentColor == colorChoice.parentColor" style="background-color: {{colorChoice.parentColor}}">&nbsp;</option>
+								</select>
+								<select ng-model="g.color" style="width: 30px; background-color: {{g.color}};" ng-show="g.hasNonContainers" ng-change="updateNodeGroupColor(g.name, g.color, g.parentColor)">
+									<option ng-repeat="colorChoice in nodeColors track by colorChoice.color" value="{{colorChoice.color}}" ng-selected="g.color == colorChoice.color" style="background-color: {{colorChoice.color}}">&nbsp;</option>
+								</select>
+							</div>
+						</div>
+						<div id="collapse{{g.groupId}}" class="collapse" data-parent="#heading{{g.groupId}}">
+							<ul class="card-body no-bullets">
+								<li ng-repeat="n in groups[g.name].nodes"><a href="#" ng-click="selectNode(n.data.id)">{{n.data.id}}</a></li>
+							</ul>
+						</div>
+					</li>
+				</ul>
+			</div>
+		</div>
+	</div>
+	<div id="diagramPane" class="ui-layout-center" style="padding: 0;">
+		<div id="diagramControls" class="toolbar ui-layout-north">
+			<ul class="toolbar">
+				<li ng-click="resetDiagram()" title="Return diagram to initial state"><i class="reset"></i>Reset</li>
+				<li ng-click="isolateSelected()" title="Hide objects not directly related to current selection"><i class="isolate"></i>Isolate</li>
+				<li ng-click="isolatePlusOne()" title="Isolate the selected item and expand one level"><i class="isolate"></i><i class="plusone"></i></li>
+				<li ng-click="expandIsolation()" title="Expand visible set to related and child objects"><i class="expand"></i>Expand</li>
+				<li ng-click="selectParent()" title="Move selection to parent object"><i class="selectParent"></i>Parent</li>
+				<li ng-click="subtractSelected()" title="Remove selected object from current view"><i class="subtract"></i>Subtract</li>
+				<li ng-click="fitAll()" title="Zoom and center view to fit all visibile objects"><i class="fitAll"></i>Fit All</li>
+				<li ng-click="arrange()" title="Arrange visible objects"><i class="arrange"></i>Arrange</li>
+				<li ng-click="saveView()" title="Save current view"><i class="save"></i>Save</li>
+				<li ng-click="restoreView()" title="Restore previous view"><i class="restore"></i>Restore</li>
+				<li ng-click="downloadImage()" title="Download current view as an image file"><i class="snapshot"></i>Snapshot</li>
+				<li ng-click="downloadData()" title="Download current source data"><i class="download"></i>Data</li>
+				<li>
+					<i class="goto"></i>Go to: <select ng-model="selectedNodeId" ng-change="selectNode(selectedNodeId)">
+						<optgroup ng-repeat="g in groups | orderByObjectProperty:'name'" label="{{g.name}}">
+							<option ng-repeat="n in groups[g.name].nodes | orderBy:'data.id'" value="{{n.data.id}}">{{n.data.id}}</option>
+						</optgroup>
+					</select>
+				</li>
+			</ul>
+		</div>
+		<div id="cyContainer" class="content ui-layout-content" style="height: 90vh;">
+			<div id="cy" style="width: 100%;"></div>
+		</div>
+	</div>
+	<div id="rightToolPane" class="ui-layout-east">
+		<div id="detailsPane" class="ui-layout-center">
+		<div class="header">Details</div>
+			<div id="info-container" class="content ui-layout-content">
+				<div id="info" style="height: 100%;" ng-show="nodeDetails != null">
+					<div style="font-size: smaller;">{{nodeDetails.properties._type}}:</div>
+					<h3>{{nodeDetails.properties.Name}}</h3>
+					<div ng-show="navOptions.allowSuggestions && selectedNodeId" style="width: 100%; text-align: right;"><a class="btn btn-info" style="margin: 3px;" href="mailto:{{navOptions.configChangeTo}}?subject=Configuration%20Update{{selectedNodeId && (' (' + selectedNodeId + ')')}}{{ (navOptions.configChangeCC ? ('&cc=' + navOptions.configChangeCC) : '') }}&body={{changeBody}}"><i class="icon email" style="background-color: white; margin-right: 3px;"></i>Suggest a change</a></div>
+					<ul class="no-bullets" style="border-top: 1px solid #000000;">
+						<li class="property-item" ng-repeat="(key, value) in nodeDetails.properties" ng-show="key != 'Name' && !key.trim().startsWith('_')"><strong>{{key.replace(':','')}}:</strong>
+							<div ng-show="key.trim().startsWith(':')" style="line-height: 1.15em;">
+								<ul class="no-bullets relationship-property">
+									<li ng-repeat="linkedItem in (value | splitList) track by linkedItem" style="display: inline-block;">
+										<span class="navLink"><a href="#" ng-click="selectNode(linkedItem)">{{linkedItem}}</a></span>
+									</li>
+								</ul>
+							</div>
+							<span class="simple-property" ng-show="!key.trim().startsWith(':') && !key.trim().startsWith('_')">{{value}}</span>
+						</li>
+					</ul>
+					<div id="incoming-links" ng-show="nodeDetails && nodeDetails.inbound && nodeDetails.inbound.length"><h3>Related items</h3>
+						<ul class="no-bullets">
+							<li ng-repeat="item in nodeDetails.inbound"><a href='#' ng-click="selectNode(item.source)">{{item.source}}</a></li>
+						</ul>
+					</div>
+				</div>&#160;
+			</div>
+		</div>
+		<div id="guidePane" class="ui-layout-south">
+			<div class="header">Guide</div>
+			<div class="content ui-layout-content">
+				<dt>Left-click:</dt><dd>Select object (no zoom)</dd>
+				<dt>Right-click:</dt><dd>Select and Zoom to object.</dd>
+				<dt>Right-click background:</dt><dd>Fit diagram to view and center objects.</dd>
+			</div>
+		</div>
+	</div>
+<script type='text/javascript'>
+(function(window, $, NavUtil, undefined) {
+	var layout;
+
+	function updateDiagram() {
+		(window.SpreadNodeUtil && window.SpreadNodeUtil.resizeDiagram());
+	}
+
+	function layoutNavigator() {
+		layout = $('body').layout({
+			applyDemoStyles: false,
+			defaults: {
+					paneClass:				"pane" 		// default = 'ui-layout-pane'
+				,	resizerClass:			"resizer"	// default = 'ui-layout-resizer'
+				,	togglerClass:			"toggler"	// default = 'ui-layout-toggler'
+				,	buttonClass:			"button"	// default = 'ui-layout-button'
+				,	contentSelector:		".content"	// inner div to auto-size so only it scrolls, not the entire pane!
+				,	contentIgnoreSelector:	"span"		// 'paneSelector' for content to 'ignore' when measuring room for content
+				,	togglerLength_open:		35			// WIDTH of toggler on north/south edges - HEIGHT on east/west edges
+				,	togglerLength_closed:	35			// "100%" OR -1 = full height
+				,	togglerTip_open:		"Close This Pane"
+				,	togglerTip_closed:		"Open This Pane"
+				,	resizerTip:				"Resize This Pane"
+				,	hideTogglerOnSlide:		true		// hide the toggler when pane is 'slid open'
+				,	fxName:  				"slide"
+				,	fxSpeed: 				"slow"
+			},
+			center: {
+				paneSelector: "#diagramPane"
+			},
+			west: {
+				"size": "auto",
+				"minSize": 320
+			},
+			west__childOptions:	{
+				minSize:				50,	// ALL panes
+				center__minSize:		200,
+				south__size:			320,
+				south__minSize:			200,
+				resizerClass:	"resizer"	// default = 'ui-layout-resizer'
+			},
+			east: {
+				"size": "auto",
+				"minSize": 320
+			},
+			east__childOptions:	{
+				minSize:				50,	// ALL panes
+				center__size:			280,
+				south__size:			200,
+				resizerClass:	"resizer"	// default = 'ui-layout-resizer'
+			},
+			"onopen_end": updateDiagram,
+			"onshow_end": updateDiagram,
+			"onclose_end": updateDiagram,
+			"onresize_end": updateDiagram,
+			"onhide_end": updateDiagram
+		});
+
+		var leftToolPaneSelector = "#leftToolPane";
+		var rightToolPaneSelector = "#rightToolPane";
+
+		$("<span></span>").addClass("pin-button").prependTo(leftToolPaneSelector);
+		$("<span></span>").addClass("pin-button").prependTo(rightToolPaneSelector);
+
+		layout.addPinBtn( leftToolPaneSelector +" .pin-button", "west");
+		layout.addPinBtn( rightToolPaneSelector +" .pin-button", "east");
+
+		$("<span></span>").attr("id", "leftToolPaneCloser" ).prependTo(leftToolPaneSelector);
+		$("<span></span>").attr("id", "rightToolPaneCloser").prependTo(rightToolPaneSelector);
+
+		layout.addCloseBtn("#leftToolPaneCloser", "west");
+		layout.addCloseBtn("#rightToolPaneCloser", "east");
+	}
+
+	function loadData() {
+		/*********** Begin loading data ***********/
+
+		var configLink = document.querySelector('link[rel="nav-config"]'),
+			configHref = (configLink && (configLink.getAttribute('href') || ''));
+
+		var excelDataLink = document.querySelector('link[rel="excel-data"]'),
+			excelDataHref = (excelDataLink && (excelDataLink.getAttribute('href') || ''));
+		
+		if(excelDataHref && XLSXUtil ) {
+			XLSXUtil.loadWorkbook(excelDataHref, function(workbook) {
+				var graphData = { nodes: [], links: [], tags: [] };
+				var groups = {};
+				var allTags = {};
+				var allTagged = {};
+
+				function addTag(tagName, data, items) {
+					data = data || {};
+					items = items || [];
+					tagName = NavUtil.standardizeTagName(tagName);
+
+					var tagEntry = allTags[tagName] = (allTags[tagName] || {
+						id: tagName,
+						name: tagName,
+						items: [],
+						data: {}
+					});
+
+					tagEntry.items = NavUtil.getUniqueItems(tagEntry.items.concat(items));
+					tagEntry.data = $.extend({}, tagEntry.data, data);
+				}
+
+				function addTaggedItem(itemName, tags) {
+					allTagged[itemName] = (allTagged[itemName] || []).concat(tags);
+				}
+
+				function addMetadata(graphData) {
+					if(!angular.isObject(graphData) || !graphData.nodes) {
+						return;
+					}
+
+					//for(var ) // nodes
+
+				}
+
+				function convertWorkbookToGraphData(workbook) {
+					var workbookJson = XLSXUtil.to_json(workbook);
+
+					var worksheetNames = (workbook.SheetNames || []);
+
+					var dataSheetNames = worksheetNames.filter(function(name) { return name.match(/^(Sheet|_|#)/) == null && name.toLowerCase() != "relationships"; });
+
+					var tagSheets = worksheetNames.filter(function(name) {
+						return (name || '').trim().startsWith('#');
+					});
+
+					tagSheets.forEach(function(sheetName) {
+						var sheet = workbookJson[sheetName];
+
+						if(!sheet) return;
+
+						sheet.forEach(function(item) {
+							var nameProperty = NavUtil.getMatchingPropertyName('Name', item);
+
+							var tagName = NavUtil.standardizeTagName(item[nameProperty]);
+
+							var taggedItems = NavUtil.getUniqueItems(
+								[].concat.apply([], Object.keys(item).filter(function(key) { return (key || '').trim().startsWith(':'); })
+									.map(function(key) {
+										var listItems = (item[key] || '').split(/\s*,\s*/);
+										return listItems;
+									}))
+							);
+
+							addTag(tagName, item, taggedItems);
+
+							taggedItems.forEach(function(taggedItem) {
+								addTaggedItem(taggedItem, tagName);
+							})
+						});
+					});
+
+					dataSheetNames.forEach(function(name) {
+						var itemType = name;
+						var relationshipProperties = {};
+						var sheet = workbookJson[name];
+
+						if(!sheet) return;
+
+						sheet.forEach(function(item) {
+							var itemNameProperty = NavUtil.getMatchingPropertyName('Name', item);
+							var itemName = item[itemNameProperty];
+							var itemTypeProperty = NavUtil.getMatchingPropertyName('_type', item);
+
+							item['_type'] = (itemTypeProperty && item[itemTypeProperty]) || itemType;
+
+							groups[itemType] = groups[itemType] || (Object.keys(groups).length + 1) % 20;
+
+							var tagsProperty = NavUtil.getMatchingPropertyName('Tags', item);
+
+							var tags = tagsProperty ? item[tagsProperty].trim().split(/\s*,\s*/) : [];
+
+							addTaggedItem(itemName, tags);
+
+							// append this item to the items tagged
+							tags.forEach(function(tagName) { addTag(tagName, {}, itemName); });
+
+							graphData.nodes.push({
+								id: itemName,
+								name: `${item['Name']}`,
+								comment: `${item['Name']}`,
+								group: groups[itemType],
+								type: itemType,
+								tags: allTagged[itemName],
+								data: item
+							});
+							
+							Object.keys(item).forEach(function(key){
+								var m;
+								if((m = key.match(/^\s*:([^\s]+)\s+(\S+.*)$/)) != null) {
+									// handle comma-separated relationship lists
+									var targets = (item[key] || '').trim().split(/\s*,\s*/);
+									
+									targets.forEach(function(targetId) {
+										graphData.links.push({
+											source: itemName, target: targetId, value: m[1]
+										});
+									});
+								}
+							});
+						});
+					});
+
+					(workbookJson["Relationships"] &&
+						workbookJson["Relationships"].forEach(function(item) {
+							var getIndexById = function(id) { return graphData.nodes.findIndex(function(node) { return node.id == id; }); }
+							var sourceId = item['Source Name'], targetId = item['Target Name'], sourceIndex = getIndexById(sourceId), targetIndex = getIndexById(targetId);
+
+							graphData.links.push({source: sourceId, target: targetId, value: item['Relationship Type']});
+						})
+					);
+
+					graphData.tags = Object.keys(allTags).map(function(k) { return allTags[k]; });
+
+					// this needs to be a local instance
+					return graphData;
+				}
+
+				graphData = convertWorkbookToGraphData(workbook) || graphData;
+
+				addMetadata(graphData);
+
+				SpreadNodeUtil.loadOptions(configHref);
+				SpreadNodeUtil.setData(graphData);
+				
+				var cyControls;
+
+				SpreadNodeUtil.getData(function(data) {
+					var horizontalSpacing = 10, verticalSpacing = 10;
+
+					var cyData = [], nodeTypeNames = {}, graphData = data.graphData,
+					groups = data.groups;
+					
+					Object.keys(groups).forEach(function(key, index) {
+						groups[key].x = index * horizontalSpacing;
+						groups[key].y = index * verticalSpacing;
+					});
+
+					graphData.nodes.forEach(function(node, index) {
+						var nodeTypeId = node.type.replace(/\s+/,'_'),
+							group = (groups[node.type] || { color: '#ffffff', parentColor: 'lightyellow', borderColor: '#000000' });
+
+						cyData.push({
+							data: {
+								label: node.name.replace(/^(.+:\s*)+?/, '').split(/\s+/g).join('\n'),
+								id: node.id,
+								groupName: node.type,
+								parent: nodeTypeId,
+								groupColor: group.color,
+								borderColor: group.borderColor,
+								parentColor: group.parentColor,
+								tags: node.tags,
+								fontSize: '2em',
+								properties: node.data
+							},
+							classes : (node.tags || [])
+								.map(function(t) {
+									var result = NavUtil.formatNodeTag(t);
+									return result; }
+								)
+								.join(' '),
+							group: "nodes",
+							removed: false,
+							selected: false,
+							selectable: true,
+							locked: false,
+							grabbed: false,
+							grabbable: true
+						});
+					});
+					graphData.links.forEach(function(link, index){
+						if(link.value.match(/^:?INCLUDES$/i) != null) {
+							// treat as compound node
+							var findNodeFunc = function(nodeId) {
+								return function(item) {
+									return item.group == "nodes" && item.data.id == nodeId;
+								};
+							}
+
+							// find target in nodes and set parent to source
+							var sourceNode = cyData.find(findNodeFunc(link.source)), targetNode = cyData.find(findNodeFunc(link.target));
+
+							(sourceNode && targetNode && (targetNode.data.parent = sourceNode.data.id));
+						} else {
+							cyData.push({
+								data: {
+									label: link.value,
+									id: 'e' + index,
+									source: link.source,
+									target: link.target
+								},
+								position: {},
+								// classes: "center-center",
+								group: "edges"
+							});
+						}
+					});
+
+					cyControls = CytoscapeUtil(cyData);
+
+				});
+				
+				SpreadNodeUtil.setCyControls(cyControls);
+
+				updateDiagram();
+			});
+		}
+	}
+
+	$(function () {
+		layoutNavigator();
+
+		loadData();
+	});
+
+}(window, window.jQuery, window.NavUtil));
+</script>
+</body>
+</html>
