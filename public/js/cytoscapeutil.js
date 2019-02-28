@@ -69,7 +69,7 @@
                         'text-margin-y': 90,
                         //'z-index': 1001,
                         'z-compound-depth': 'auto',
-                        'padding': 90
+                        'padding': 120
                     }
                 },
 
@@ -157,12 +157,13 @@
                 animate: 'end',
                 refresh: 30,
                 randomize: false,
+                //nodeDimensionsIncludeLabels: true,
                 animationDuration: 800,
                 tile: true,
                 // Represents the amount of the vertical space to put between the zero degree members during the tiling operation(can also be a function)
-                tilingPaddingVertical: 200,
+                tilingPaddingVertical: 150,
                 // Represents the amount of the horizontal space to put between the zero degree members during the tiling operation(can also be a function)
-                tilingPaddingHorizontal: 100,
+                tilingPaddingHorizontal: 200,
                 gravityRange: 1.5,
                 gravityRangeCompound: 1.0,
                 padding: 50,
@@ -178,7 +179,6 @@
                 //avoidOverlap: true,
                 //avoidOverlapPadding: 100,
                 //spacingFactor: 1,
-                //nodeDimensionsIncludeLabels: true,
                 //zoom: .6,
             };
 
@@ -442,6 +442,12 @@
         masterLayout.run();
         
         var controls = {
+            applyStyles: function(style) {
+                style = style || [];
+                style.forEach(function(item) {
+                    cy.style().selector(item.selector).style(item.style).update();
+                });
+            },
             selectNode: function(nodeId) {
                 nodeId = (nodeId || '').trim().replace('.', '\\.');
                 var eles = cy.$('#' + nodeId);

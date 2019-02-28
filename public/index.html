@@ -100,8 +100,6 @@
 					for(var key in input) {
 						var match = propertyRegExp.match(key);
 						
-						debugger;
-
 						//[{
 						//	relationshipType: "INCLUDES", 
 						//	targetTypes : [{ targetType: "Partner System", targetValue: "OdtStarsQA1" }]
@@ -300,17 +298,18 @@
 				var defaultOptions = $scope.navOptions = {
 					allowSuggestions: false,
 					configChangeTo: "",
-					configChangeCC: ""
+					configChangeCC: "",
+					style: []
 				};
 
-				fetch(url, {
+				return fetch(url, {
 					method: "GET",
 					cache: "no-cache",
 					credentials: "include",
 					mode: "no-cors",
 					responseType : "json"
 				}).then(function(response) {
-					response.json().then(function(data) {
+					return response.json().then(function(data) {
 						if(data) {
 							$scope.navOptions = data;
 						}
@@ -333,7 +332,7 @@
                 (callback && (typeof callback == "function") && callback({
                     graphData: $scope.graphData,
                     groups: $scope.groups
-                }));
+                }, $scope.navOptions));
 			};
 
 			SpreadNodeUtil.resizeDiagram = function() {
@@ -616,7 +615,7 @@
 		
 		if(excelDataHref && XLSXUtil ) {
 			XLSXUtil.loadWorkbook(excelDataHref, function(workbook) {
-				var graphData = { nodes: [], links: [], tags: [] };
+				var graphData = { nodes: [], links: [], tags: [], style: [] };
 				var groups = {};
 				var allTags = {};
 				var allTagged = {};
@@ -639,15 +638,6 @@
 
 				function addTaggedItem(itemName, tags) {
 					allTagged[itemName] = (allTagged[itemName] || []).concat(tags);
-				}
-
-				function addMetadata(graphData) {
-					if(!angular.isObject(graphData) || !graphData.nodes) {
-						return;
-					}
-
-					//for(var ) // nodes
-
 				}
 
 				function convertWorkbookToGraphData(workbook) {
@@ -747,6 +737,33 @@
 						})
 					);
 
+					(workbookJson["_Styles"] && 
+						workbookJson["_Styles"].forEach(function(item) {
+							var selectorPropertyName = NavUtil.getMatchingPropertyName('Selector', item);
+							if(!item || !item[selectorPropertyName]) return;
+							var selector = (item[selectorPropertyName] || '').trim();
+							if(selector) {
+								var newStyle = {
+									selector: selector,
+									style: {}
+								};
+
+								var stylesPropertyName = NavUtil.getMatchingPropertyName('Styles', item);
+								var styles = (item[stylesPropertyName] || '').trim().split(/(;?\s*\r?\n)/);
+								styles.forEach(function(styleItem) {
+									var result = (/^\s*([-_a-zA-Z0-9]+)\s*:\s*(.+)$/).exec(styleItem);
+									(result != null && (newStyle.style[result[1]] = result[2]));
+								});
+
+								var styleKeys = Object.keys(item).filter(function(key) { return [selectorPropertyName, stylesPropertyName].indexOf(key) == -1; });
+
+								(styleKeys && styleKeys.length && styleKeys.forEach(function(key) { var setting = item[key]; (item[key] && (newStyle.style[key] = item[key])); }));
+
+								graphData.style.push(newStyle);
+							}
+						})
+					);
+
 					graphData.tags = Object.keys(allTags).map(function(k) { return allTags[k]; });
 
 					// this needs to be a local instance
@@ -755,14 +772,16 @@
 
 				graphData = convertWorkbookToGraphData(workbook) || graphData;
 
-				addMetadata(graphData);
-
-				SpreadNodeUtil.loadOptions(configHref);
-				SpreadNodeUtil.setData(graphData);
-				
 				var cyControls;
 
-				SpreadNodeUtil.getData(function(data) {
+				function applyData(data, options) {
+					data = data || { groups: {}, graphData : {
+						nodes: [], links: [], tags: [], style: []
+					}};
+					options = options || { style: [] };
+
+					var allStyles = (options.style || []).concat(data.graphData.style || []);
+
 					var horizontalSpacing = 10, verticalSpacing = 10;
 
 					var cyData = [], nodeTypeNames = {}, graphData = data.graphData,
@@ -835,9 +854,20 @@
 
 					cyControls = CytoscapeUtil(cyData);
 
-				});
+					if(allStyles && allStyles.length) {
+						cyControls.applyStyles(allStyles);
+					}
+				}
+
+				SpreadNodeUtil.loadOptions(configHref)
+					.then(function(options) {
+
+						SpreadNodeUtil.setData(graphData);
 				
-				SpreadNodeUtil.setCyControls(cyControls);
+						SpreadNodeUtil.getData(applyData);
+				
+						SpreadNodeUtil.setCyControls(cyControls);
+				});
 
 				updateDiagram();
 			});

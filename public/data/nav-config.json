@@ -1,5 +1,42 @@
 {
     "allowSuggestions": true,
     "configChangeTo": "Sample, Person;",
-    "configChangeCC": ""
+    "configChangeCC": "",
+    "style": [
+        {
+            "selector": "node",
+            "style": {
+                "text-outline-color": "#DDDDDD",
+                "text-outline-width": 2,
+                "text-outline-opacity": 0.6,
+                "background-fit": "contain",
+                "background-position-x": "5%",
+                "background-height-relative-to": "include-padding",
+                "background-width-relative-to": "include-padding"
+            }
+        },
+        {
+            "selector": "node:parent",
+            "style": {
+                "width": "label",
+                "background-fit": "none",
+                "background-height": "25%",
+                "background-width": "25%",
+                "background-position-x": "5%",
+                "background-position-y": "5%"
+            }
+        },
+        {
+            "selector": "node[groupName='Data Hub']",
+            "style" : {
+                "background-image": "url('https://openclipart.org/image/300px/svg_to_png/163711/database-server.png')"
+            }
+        },
+        {
+            "selector": "node[groupName='Salesforce']",
+            "style" : {
+                "background-image": "url('https://openclipart.org/image/300px/svg_to_png/193560/1400625045.png')"
+            }
+        }
+    ]
 }
