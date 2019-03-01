@@ -4,10 +4,11 @@
 	<title>Config Navigator</title>
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1">
     <!-- For loading external data files -->
-    <script src="https://cdn.polyfill.io/v2/polyfill.min.js?features=Promise,fetch"></script>
+    <script type='text/javascript' src="js/polyfill.min.js"></script>
 	<link type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' href='data/config-data.xlsx' rel='excel-data' >
 	<link type='application/json' href='data/nav-config.json' rel='nav-config' >
-	<script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.0/angular.js"></script>
+	<script type='text/javascript' src='js/angular.js'></script>
+	<!-- <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.0/angular.js"></script> -->
 	<script type='text/javascript' src='js/jszip.js'></script>
 	<script type='text/javascript' src='js/xlsx.js'></script>
 	<script type='text/javascript' src='js/d3v4.js'></script>
@@ -749,9 +750,9 @@
 								};
 
 								var stylesPropertyName = NavUtil.getMatchingPropertyName('Styles', item);
-								var styles = (item[stylesPropertyName] || '').trim().split(/(;?\s*\r?\n)/);
+								var styles = (item[stylesPropertyName] || '').trim().split(/(;*\s*\r?\n)/);
 								styles.forEach(function(styleItem) {
-									var result = (/^\s*([-_a-zA-Z0-9]+)\s*:\s*(.+)$/).exec(styleItem);
+									var result = (/^\s*([-_a-zA-Z0-9]+)\s*:\s*([^;]+);?$/).exec(styleItem);
 									(result != null && (newStyle.style[result[1]] = result[2]));
 								});
 
