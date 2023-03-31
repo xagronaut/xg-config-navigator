@@ -150,12 +150,13 @@
             elements: data
         });
 
-        function getDefaultOptions(options) {
+        function getDefaultLayoutOptions(options) {
             options = options || {};
             var defaults = {
                 name: 'cose-bilkent',
                 animate: 'end',
                 refresh: 30,
+                quality: 'draft',
                 randomize: false,
                 //nodeDimensionsIncludeLabels: true,
                 animationDuration: 800,
@@ -175,7 +176,6 @@
                 //name: 'grid',
                 //name: 'circle',
                 //name: 'breadthfirst',
-                // unused options from other layouts
                 //avoidOverlap: true,
                 //avoidOverlapPadding: 100,
                 //spacingFactor: 1,
@@ -267,10 +267,10 @@
             return eles;
         }
 
-        function arrange(eles) {
-            cy.$(':locked').unlock();
+        function arrange(eles, options) {
+            options = options || {};
 
-            var allVisible = cy.$(':visible');
+            cy.$(':locked').unlock();
 
             var arrangeElements;
 
@@ -282,7 +282,9 @@
                 arrangeElements = eles.union(eles.descendants(':visible'));
             }
 
-            var layoutOptions = getDefaultOptions({ fit: true });
+            (!options.hasOwnProperty(options, "fit") && (options.fit = true));
+
+            var layoutOptions = getDefaultLayoutOptions(options);
 
             var layout = arrangeElements.layout(layoutOptions);
 
@@ -421,7 +423,7 @@
             }
         });
 
-        var layoutOptions = getDefaultOptions();
+        var layoutOptions = getDefaultLayoutOptions();
 
         // var masterLayout = cy.layout(layoutOptions);
         var initialLayoutElements = cy.$(':parent:orphan:visible');
@@ -569,6 +571,12 @@
                 groupNodes.data('groupColor', colors.color || groupColor);
                 groupNodes.data('borderColor', colors.borderColor || borderColor);
                 groupNodes.data('parentColor', colors.parentColor || parentColor);
+            },
+            zoom: cy.zoom,
+            minZoom: cy.maxZoom,
+            maxZoom: cy.maxZoom,
+            setZoomLevel: function(level) {
+                cy.zoom(level);
             },
             onSelect: function(callback) {
                 onSelectCallback = callback || function() {};

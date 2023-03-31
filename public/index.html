@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1">
     <!-- For loading external data files -->
     <script type='text/javascript' src="js/polyfill.min.js"></script>
-	<link type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' href='data/config-data.xlsx' rel='excel-data' >
+	<link type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' href='data/20221101_LightGraphModel.xlsx' rel='excel-data' >
 	<link type='application/json' href='data/nav-config.json' rel='nav-config' >
 	<script type='text/javascript' src='js/angular.js'></script>
 	<!-- <script src="https://ajax.googleapis.com/ajax/libs/angularjs/1.6.0/angular.js"></script> -->
@@ -101,11 +101,6 @@
 					for(var key in input) {
 						var match = propertyRegExp.match(key);
 						
-						//[{
-						//	relationshipType: "INCLUDES", 
-						//	targetTypes : [{ targetType: "Partner System", targetValue: "OdtStarsQA1" }]
-						//}]
-
 						if(match == null) {
 							continue;
 						}
@@ -231,6 +226,18 @@
 					cyControls.restoreViewData(viewData);
 				}
 			};
+
+			$scope.setZoomLevel = function() {
+				var { cyControls } = $scope;
+				if(!cyControls) return;
+				$scope.zoom($scope.zoomLevel);
+				$scope.zoomLevel($scope.zoom());
+				//$scope.zoomLevel = $scope.zoomLevel || cyControls.getZoomLevel();
+				//var minZoom = cyControls.minZoom(), maxZoom = cyControls.maxZoom();
+				//if($scope.zoomLevel < cyControls.minZoom) $scope.zoomLevel = minZoom;
+				//if($scope.zoomLevel > cyControls.maxZoom) $scope.zoomLevel = maxZoom;
+				//cyControls.setZoomLevel($scope.zoomLevel);
+			}
 			
 			function SpreadNodeUtil() {}
 
@@ -300,7 +307,8 @@
 					allowSuggestions: false,
 					configChangeTo: "",
 					configChangeCC: "",
-					style: []
+					style: [],
+					animate: 'end'
 				};
 
 				return fetch(url, {
@@ -354,7 +362,7 @@
 					"fitAll", "arrange",
 					"resetDiagram",
 					"selectParent",
-					"getViewData", "restoreViewData"
+					"getViewData", "restoreViewData","setZoomLevel", "minZoom", "maxZoom", "zoom"
 				];
 				NavUtil.copyPropertyList(apiMethods, cyControls, $scope);
 
@@ -373,6 +381,11 @@
 					(cyControls && cyControls.selectNode(nodeId));
 					$scope.selectedNodeId = nodeId;
 				};
+
+			 	$scope.getNodeById = function(nodeId) {
+					var matchingNode = $scope.graphData.nodes.find(function(item) { return item.id == nodeId; });
+					return matchingNode;
+				}
 
 				cyControls.onSelect(SpreadNodeUtil.setNodeDetails);
 				cyControls.onUnselect(SpreadNodeUtil.setNodeDetails);
@@ -412,7 +425,7 @@
 							<ul class="card-body no-bullets"><li ng-repeat="o in orphanNodes"><a href="#" ng-click="selectNode(o.id)">{{o.id}}</a></li></ul>
 						</div>
 					</li>
-					<li id="headingTag{{ tag.name | cleanCssId }}" class="card" data-toggle="collapse" ng-repeat="tag in graphData.tags track by (tag.name | cleanCssId) | orderBy:'name'" >
+					<li id="headingTag{{ tag.name | cleanCssId }}" class="card" data-toggle="collapse" ng-repeat="tag in graphData.tags | orderBy:'name' | filter:cleanCssId track by $index" >
 						<div class="card-header" style="border: 2px solid #777777;">
 							<button class="btn btn-link" data-toggle="collapse" data-target="#collapseTag{{ tag.name | cleanCssId }}"><i class="icon tag" style="margin-right: 3px; padding: -10px;"></i>{{tag.name}}</button>
 						</div>
@@ -423,13 +436,13 @@
 								<li ng-click="addTag(tag.id | formatNodeTag)"><i class="add"></i>Add</li>
 								<li ng-click="subtractTag(tag.id | formatNodeTag);"><i class="subtract"></i>Subtract</li>
 							</ul>
-							<ul class="card-body no-bullets">
+ 							<ul class="card-body no-bullets">
 								<li ng-repeat="taggedItem in tag.items track by taggedItem" style="vertical-align: middle; line-height: 40px;">
 									<div class="item-buttons">
 										<button class="btn" ng-click="isolatePlusOne(taggedItem)"><i class="icon isolate"></i><i class="icon plusone"></i></button>
 										<button class="btn" ng-click=""><i class="icon link"></i></button>
 									</div>
-									<a href="#" ng-click="selectNode(taggedItem)" style="">{{taggedItem}}</a>
+									<a href="#" ng-click="selectNode(taggedItem)">{{getNodeById(taggedItem).fullName}}</a>
 									<!-- <hr class="clear-float" /> -->
 								</li>
 							</ul>
@@ -458,7 +471,16 @@
 						</div>
 						<div id="collapse{{g.groupId}}" class="collapse" data-parent="#heading{{g.groupId}}">
 							<ul class="card-body no-bullets">
-								<li ng-repeat="n in groups[g.name].nodes"><a href="#" ng-click="selectNode(n.data.id)">{{n.data.id}}</a></li>
+								<li ng-repeat="n in groups[g.name].nodes | orderBy:'data.name'">
+									<div class="item-buttons">
+ 										<button class="btn" ng-click="isolatePlusOne(n.data.id)"><i class="icon isolate"></i><i class="icon plusone"></i></button>
+										<!-- <button class="btn" ng-click=""><i class="icon link"></i></button> -->
+									</div>
+									<a href="#" ng-click="selectNode(n.data.id)">{{n.data.name}}</a>
+								</li>
+								<!-- <li ng-repeat="taggedItem in tag.items track by taggedItem" style="vertical-align: middle; line-height: 40px;">
+									<a href="#" ng-click="selectNode(taggedItem)" style="">{{taggedItem}}</a>
+								</li> -->
 							</ul>
 						</div>
 					</li>
@@ -487,6 +509,12 @@
 							<option ng-repeat="n in groups[g.name].nodes | orderBy:'data.id'" value="{{n.data.id}}">{{n.data.id}}</option>
 						</optgroup>
 					</select>
+				</li>
+				<li class="btn-group-toggle" data-toggle="buttons">
+					<div class="btn btn-secondary active"><input type="checkbox" ng-model="skipAnimation"><i class="skip"></i>Skip Animation</div>
+				</li>
+				<li>
+					<i class="goto"></i>Zoom: <input type="text" ng-model="zoomLevel" ng-change="setZoomLevel()" />
 				</li>
 			</ul>
 		</div>
@@ -637,8 +665,8 @@
 					tagEntry.data = $.extend({}, tagEntry.data, data);
 				}
 
-				function addTaggedItem(itemName, tags) {
-					allTagged[itemName] = (allTagged[itemName] || []).concat(tags);
+				function addTaggedItem(itemId, tags) {
+					allTagged[itemId] = (allTagged[itemId] || []).concat(tags);
 				}
 
 				function convertWorkbookToGraphData(workbook) {
@@ -687,6 +715,8 @@
 
 						sheet.forEach(function(item) {
 							var itemNameProperty = NavUtil.getMatchingPropertyName('Name', item);
+							var itemIdProperty = NavUtil.getMatchingPropertyName('Id', item) || itemNameProperty;
+							var itemId = item[itemIdProperty];
 							var itemName = item[itemNameProperty];
 							var itemTypeProperty = NavUtil.getMatchingPropertyName('_type', item);
 
@@ -698,18 +728,22 @@
 
 							var tags = tagsProperty ? item[tagsProperty].trim().split(/\s*,\s*/) : [];
 
-							addTaggedItem(itemName, tags);
+							addTaggedItem(itemId, tags);
 
 							// append this item to the items tagged
-							tags.forEach(function(tagName) { addTag(tagName, {}, itemName); });
+							tags.forEach(function(tagName) { addTag(tagName, {}, itemId); });
+
+							var displayName = itemName.replace(/^[A-Z][^_]*_/, ''); // hide prefix notation
 
 							graphData.nodes.push({
-								id: itemName,
-								name: `${item['Name']}`,
+								id: itemId,
+								//name: `${item['Name']}`,
+								name: `${displayName}`,
+								fullName: `${itemType}: ${displayName}`,
 								comment: `${item['Name']}`,
 								group: groups[itemType],
 								type: itemType,
-								tags: allTagged[itemName],
+								tags: allTagged[itemId],
 								data: item
 							});
 							
@@ -721,7 +755,7 @@
 									
 									targets.forEach(function(targetId) {
 										graphData.links.push({
-											source: itemName, target: targetId, value: m[1]
+											source: itemId, target: targetId, value: m[1]
 										});
 									});
 								}

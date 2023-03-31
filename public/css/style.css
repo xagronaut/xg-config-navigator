@@ -199,6 +199,10 @@ i.goto {
     background-image: url(../images/baseline-arrow_forward-24px.svg);
 }
 
+i.skip {
+    background-image: url(../images/skip_next-24px.svg);
+}
+
 i.add {
     background-image: url(../images/baseline-add_circle_outline-24px.svg);
 }
